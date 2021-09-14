@@ -1,41 +1,47 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
+	"strconv"
+
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 )
 
-type book struct {
+type Book struct {
 	ID string`json:"ID"`
 	Title string`json:"Title"`
 	Author string`json:"Author"`
 }
 
-var books = []book{
-	{
-		ID: "1",
-		Title: "Readable Code",
-		Author: "Dustin Boswell",
-	},
-	{
-		ID: "2",
-		Title: "Clean Architecture",
-		Author: "Robert C.Martin",
-	},
+func EnvLoad() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 }
 
-func homeLink(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Welcome home!")
-}
+var db *sql.DB
+var err error
 
 func main () {
+	EnvLoad()
+
+	db, err = sql.Open("mysql", os.Getenv("USER_NAME") + ":" + os.Getenv("PASSWORD") + "@/sample")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer db.Close()
+
 	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/", homeLink)
 	router.HandleFunc("/books", getAllBooks).Methods("GET")
 	router.HandleFunc("/book", createBook).Methods("POST")
 	router.HandleFunc("/books/{id}", getOneBook).Methods("GET")
@@ -44,60 +50,128 @@ func main () {
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
 
-func createBook(w http.ResponseWriter, r *http.Request) {
-	var newBook book
-	reqBody, err := ioutil.ReadAll(r.Body)
+func getOneBook(w http.ResponseWriter, r *http.Request){
+	vars := mux.Vars(r)
+	bookID, err := strconv.Atoi(vars["id"])
 	if err != nil {
-		fmt.Fprintf(w, "error: %v", err)
+		fmt.Println("Invalid ID")
 	}
 
-	json.Unmarshal(reqBody, &newBook)
-	books = append(books, newBook)
-	w.WriteHeader(http.StatusCreated)
+	var book Book
+	err = db.QueryRow("SELECT * FROM books where id = ?", bookID).Scan( &book.ID, &book.Title, &book.Author)
+	if err != nil {
+		panic(err.Error())
+	}
 
-	json.NewEncoder(w).Encode(newBook)
+	fmt.Println(book)
+	response, _ := json.Marshal(book)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(response)
 }
 
-func getOneBook(w http.ResponseWriter, r *http.Request){
-	bookID := mux.Vars(r)["id"]
-
-	for _, singleBook := range books {
-		if singleBook.ID == bookID {
-			json.NewEncoder(w).Encode(singleBook)
-		}
+func createBook(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	var book Book
+	err = json.Unmarshal(body, &book)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	stmt, err := db.Prepare("INSERT INTO books(title, author) VALUES(?, ?)")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	result, err := stmt.Exec( book.Title, book.Author)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	lastInsertID, err := result.LastInsertId()
+	if err != nil {
+		panic(err.Error())
+	}
+	log.Printf("ID: %d was created", lastInsertID)
 }
 
 func getAllBooks(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(books)
+	rows , err := db.Query("SELECT * FROM books")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	books := []Book{}
+	for rows.Next() {
+		var book Book
+		err = rows.Scan(&book.ID, &book.Title, &book.Author)
+		if err != nil {
+			panic(err.Error())
+		}
+		books = append(books, book)
+	}
+
+	fmt.Println(books)
+	response, _ := json.Marshal(books)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(response)
 }
 
 func updateBook(w http.ResponseWriter, r *http.Request) {
-	bookID := mux.Vars(r)["id"]
-	var updateBook book
-
-	reqBody, err:= ioutil.ReadAll(r.Body)
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
-		fmt.Fprintf(w, "error: %v", err)
+		log.Fatal(err)
 	}
-	json.Unmarshal(reqBody, &updateBook)
 
-	for i , singleBook := range books {
-		if singleBook.ID == bookID {
-			singleBook.Title = updateBook.Title
-			singleBook.Author = updateBook.Author
-			books = append(books[:i], singleBook)
-			json.NewEncoder(w).Encode(singleBook)
-		}
+	var book Book
+	err = json.Unmarshal(body, &book)
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	vars := mux.Vars(r)
+	bookID, err := strconv.Atoi(vars["id"])
+
+	if err != nil {
+		fmt.Println("Invalid ID")
+	}
+
+	stmtUpdate, err := db.Prepare("UPDATE books SET title=?, author=? WHERE id=?")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = stmtUpdate.Exec(book.Title,book.Author, bookID)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("Successfully updated")
 }
-func deleteBook(w http.ResponseWriter, r *http.Request) {
-	bookID := mux.Vars(r)["id"]
 
-	for i , singleBook := range books {
-		if singleBook.ID == bookID {
-			books = append(books[:i], books[i+1:]...)
-			fmt.Fprintf(w, "The book with Id %v has been deleted successfully", bookID)
-		}
+func deleteBook(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	bookID, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		fmt.Println("Invalid ID")
 	}
+
+	stmtDelete, err := db.Prepare("DELETE FROM books WHERE id=?")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	_, err = stmtDelete.Exec(bookID)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("Successfully deleted")
 }
