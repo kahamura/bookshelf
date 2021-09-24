@@ -1,19 +1,23 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io/ioutil"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
+	firebase "firebase.google.com/go"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
+	"google.golang.org/api/option"
 )
 
 type Book struct {
@@ -40,6 +44,33 @@ func main () {
 		panic(err.Error())
 	}
 	defer db.Close()
+
+	serviceAccountKeyFilePath, err := filepath.Abs("./serviceAccountKey.json")
+	if err != nil {
+		panic("Unable to lead serviceAccountKey.json file")
+	}
+	opt := option.WithCredentialsFile(serviceAccountKeyFilePath)
+
+  //Firebase admin SDK initialization
+	app, err := firebase.NewApp(context.Background(), nil, opt)
+	if err != nil {
+		panic("Firebase lead error")
+	}
+
+	//Firebase Auth
+	client, err := app.Auth(context.Background())
+	if err != nil {
+		log.Fatalf("error getting Auth client: %v\n", err)
+	}
+
+	token, err := client.CustomToken(context.Background(), "some-uid")
+	if err != nil {
+					log.Fatalf("error minting custom token: %v\n", err)
+	}
+
+	log.Printf("Got custom token: %v\n", token)
+
+
 
 	router := mux.NewRouter().StrictSlash(true)
 	router.HandleFunc("/books", getAllBooks).Methods("GET")
