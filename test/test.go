@@ -33,9 +33,9 @@ func (c Bike) Brake() {
 	fmt.Println("バイクがブレーキをかける")
 }
 
-func drive(car Car) {
-	car.Accelerate()
-	car.Brake()
+func drive(vehicle Vehicle) {
+	vehicle.Accelerate()
+	vehicle.Brake()
 }
 
 func main() {
